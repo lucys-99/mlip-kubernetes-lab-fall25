@@ -1,7 +1,14 @@
 # Lab: Orchestrating ML training and Inference with Kubernetes
 In this lab, you'll leverage Kubernetes to enable continuous model training and inference, configure a Python-based load balancer to distribute traffic across the backend inference instances, and experiment with [container lifecycle hooks](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/) in Kubernetes.
 
-
+# SIGTERM and POSTSTART
+- POSTSTART: Hook executed immediately after container created, before ENTRYPOINT. This could be helpful for caching. 
+- SIGTERM: 
+  - Hook executed when container receives SIGTERM signal, which is sent during shutdown. This could be helpful for graceful shutdowns, such as saving model state or logging. 
+  - The grace period between receiving SIGTERM and SIGKILL is 30 seconds by default, but can be configured.
+  - This can be used to handle cleanup tasks, such as saving model state or logging, before the container is terminated.
+Reference: https://jaadds.medium.com/gracefully-terminating-pods-in-kubernetes-handling-sigterm-fb0d60c7e983
+[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)
 
 ## Deliverables
 
@@ -29,6 +36,7 @@ kubectl get po -A
 3. In `trainer_deployment.yaml` configure the cron so that the model training runs at a periodic interval (for demonstration purposes keep it fairly frequent; every 1-2 minutes)  
 ```
 kubectl apply -f trainer-deployment.yaml
+kubectl delete -f trainer-deployment.yaml
 ```
 At this point, you should be able to see the continuously running training `model-trainer-job` CronJob using the Minikube dashboard. For instructions on doing that see [Troubleshooting](#troubleshooting).
 
@@ -42,14 +50,17 @@ Then apply the manifests for the backend and the load balancer:
 ```
 kubectl apply -f backend-deployment.yaml
 kubectl apply -f load-balancer-deployment.yaml
+kubectl delete -f backend-deployment.yaml
+kubectl delete -f load-balancer-deployment.yaml
+
 ```
 Verify using [this postman collection](./mlip-kubernetes.postman_collection.json) AND/OR the following `cURL` commands. For obtaining the correct port, see [Accessing the Load Balancer](#accessing-the-load-balancer). You should see the `host` parameter in the response body vary across requests: 
 ```
-curl --location --request GET '127.0.0.1:<some-port-here>/model-info'
+curl --location --request GET '192.168.49.2:30080/model-info'
 ```
 
 ```
-curl --location --request POST '127.0.0.1:<some-port-here>/predict' \
+curl --location --request POST '127.0.0.1:5001/predict' \
 --header 'Content-Type: application/json' \
 --data-raw '{
     "avg_session_duration": 30,
@@ -66,6 +77,7 @@ curl --location --request POST '127.0.0.1:<some-port-here>/predict' \
 3. Re-deploy the backend: 
 ```
 kubectl apply -f backend-deployment.yaml
+kubectl delete -f backend-deployment.yaml
 ```
 
 Now that this task is complete you should be able to demonstrate the behavior of te lifecycle hook:    
@@ -76,6 +88,9 @@ kubectl rollout restart deployment/flask-backend-deployment
 # then in a separate process
 kubectl logs -l app=flask-backend -f
 ```
+
+
+Note that `kubectl rollout restart` will trigger rollout of the deployment, which does not take in new configuration changes. To see the new configuration changes, you will need to re-apply it.
 
 ### 
 
@@ -93,8 +108,12 @@ kubectl logs -l app=flask-backend -f
 ## Build and Push the Docker Image:
 Before you do the following steps, ensure you have logged into docker. You will need to do the following for EACH type of image (trainer, backend, and loadbalancer)
 ```
-docker build -t <your-dockerhub-username>/<load-balancer-image-name>:1.0.0 -f Dockerfile.loadbalancer .
-docker push <your-dockerhub-username>/<load-balancer-image-name>:1.0.0
+docker build --no-cache -t lucys99/flask-loadbalancer:1.0.0 -f Dockerfile.loadbalancer .
+docker build -t lucys99/flask-backend:1.0.0 -f Dockerfile.backend .
+docker build -t lucys99/model-trainer:1.0.0 -f Dockerfile.trainer .
+docker push lucys99/flask-loadbalancer:1.0.0
+docker push lucys99/flask-backend:1.0.0
+docker push lucys99/model-trainer:1.0.0
 ```
 
 ## Accessing the Load Balancer
@@ -108,7 +127,8 @@ Access the Load Balancer and Test Traffic
   ```
 - Access the load balancer using `curl` (replace `<minikube-ip>` with the output from `minikube ip`):
   ```
-  curl "http://<minikube-ip>:30080/?user_id=Alice"
+  curl "http://192.168.49.2:30080/?user_id=Alice"
+  kubectl port-forward flask-load-balancer-54c944b988-cxk6v   8080:8080
   ```
 
 2. **Use `minikube service` (If NodePort Does Not Work)**:
@@ -134,3 +154,4 @@ Open the MiniKube dashboard to monitor the status of Pods, deployments, and serv
   kubectl logs -l app=flask-load-balancer -f
   ```
 - **Image Pull Issues**: Ensure your Docker images are pushed to Docker Hub with the correct tags. [More Details](https://docs.docker.com/get-started/introduction/build-and-push-first-image/)
+- To port forward a single pod: `kubectl port-forward <pod-name> 8080:8080`

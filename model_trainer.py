@@ -49,9 +49,9 @@ def train_model():
         y = df['engagement_score']
         
         # TODO: Train model to predict Y given X
-        # you can use any model but we suggest (and import) RandomForestRegressor
-        model = ...
-        
+        model = RandomForestRegressor()
+        model.fit(X, y)
+
         # Save model and metadata
         model_info = {
             'model': model,
